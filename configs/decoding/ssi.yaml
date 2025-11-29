@@ -1,0 +1,6 @@
+# Decoding configuration for SSI
+
+beam_size_rnnt: 4
+beam_size_las: 4
+max_symbols: 200
+batch_size: 8

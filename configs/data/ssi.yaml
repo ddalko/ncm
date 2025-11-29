@@ -1,0 +1,11 @@
+# SSI dataset configuration
+
+root: data/ssi
+train_manifest: ${data.root}/train.jsonl
+dev_manifest: ${data.root}/dev.jsonl
+test_manifest: ${data.root}/test.jsonl
+
+sample_rate: 16000
+n_mels: 80
+max_duration: 20.0
+min_duration: 0.5

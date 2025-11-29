@@ -1,0 +1,56 @@
+# Default configuration for joint RNN-T + LAS training
+defaults:
+  - data: ssi
+  - experiment: joint_ssi
+  - _self_
+
+# Data configuration
+data:
+  root: data/ssi
+  sample_rate: 16000
+  n_mels: 80
+
+# Model configuration
+model:
+  vocab_size: 300
+  encoder_hidden: 512
+  encoder_layers: 3
+  pred_hidden: 512
+  pred_layers: 1
+  joint_dim: 512
+  dropout: 0.1
+  label_smoothing: 0.1
+  
+  las:
+    enc2_hidden: 512
+    dec_hidden: 512
+    embedding_dim: 256
+    attention_dim: 256
+    attention: "location"
+  
+  loss_weights:
+    rnnt: 1.0
+    las: 1.0
+
+# Training configuration
+training:
+  batch_size: 16
+  num_epochs: 40
+  lr: 1.0e-3
+  weight_decay: 1.0e-6
+  grad_clip: 5.0
+  num_workers: 4
+  output_dir: exp/joint_ssi
+
+# Wandb configuration
+wandb:
+  project: "ssi-two-pass"
+  entity: null
+  run_name: "joint_ssi"
+
+# Hydra configuration
+hydra:
+  run:
+    dir: ${training.output_dir}
+  job:
+    chdir: false
