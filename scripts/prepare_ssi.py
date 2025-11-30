@@ -14,37 +14,58 @@ from tqdm import tqdm
 def create_manifest(dataset, output_path: Path):
     """
     Create a manifest file from dataset.
+    Saves audio files separately and only stores paths in manifest.
     
     Args:
         dataset: HuggingFace dataset
         output_path: Path to output manifest file
     """
+    import numpy as np
+    import soundfile as sf
+    
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create directory for audio files
+    audio_dir = output_path.parent / f"{output_path.stem}_audio"
+    audio_dir.mkdir(exist_ok=True)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         for idx, item in enumerate(tqdm(dataset, desc=f"Creating {output_path.name}")):
             # Handle AudioDecoder object - decode to get actual audio data
-            audio_decoder = item['file_path']  # This is the AudioDecoder object
-            
-            # Get all audio samples
-            audio_samples = audio_decoder.get_all_samples()
-            
-            # Extract audio array and sample rate
-            # audio_samples.data is a torch.Tensor with shape [channels, samples]
-            audio_tensor = audio_samples.data
-            sample_rate = audio_samples.sample_rate
-            
-            # Convert to numpy array and flatten (remove channel dimension if mono)
-            audio_array = audio_tensor.squeeze().numpy()
-            
-            text = item.get('text', '')
+            if 'file_path' in item:
+                # Real dataset with AudioDecoder
+                audio_decoder = item['file_path']
+                
+                # Get all audio samples
+                audio_samples = audio_decoder.get_all_samples()
+                
+                # Extract audio array and sample rate
+                audio_tensor = audio_samples.data
+                sample_rate = audio_samples.sample_rate
+                
+                # Convert to numpy array and flatten
+                audio_array = audio_tensor.squeeze().numpy()
+                text = item.get('text', '')
+            elif 'audio_array' in item:
+                # Dummy data
+                audio_array = np.array(item['audio_array'])
+                sample_rate = item['sample_rate']
+                text = item['text']
+            else:
+                print(f"Warning: Unknown item format at index {idx}, skipping...")
+                continue
             
             # Compute duration
             duration = len(audio_array) / sample_rate
             
+            # Save audio to file
+            audio_filename = f"{output_path.stem}_{idx:06d}.wav"
+            audio_path = audio_dir / audio_filename
+            sf.write(audio_path, audio_array, sample_rate)
+            
             manifest_item = {
                 'id': f"{output_path.stem}_{idx}",
-                'audio': audio_array.tolist(),  # Convert to list for JSON
+                'audio_path': str(audio_path),  # Store path instead of array
                 'sample_rate': sample_rate,
                 'text': text,
                 'duration': duration,
@@ -77,76 +98,113 @@ def main():
     
     try:
         # Load full dataset
-        dataset = load_dataset('stapesai/ssi-speech-emotion-recognition')
+        dataset = load_dataset('stapesai/ssi-speech-emotion-recognition', split='train')
         
-        # Combine all splits if necessary
-        if 'train' in dataset:
-            all_data = dataset['train']
-        else:
-            all_data = dataset
+        print(f"Loaded {len(dataset)} samples")
         
-        print(f"Loaded {len(all_data)} samples")
+        # Calculate how many samples we need
+        total_needed = args.train_size + args.dev_size + args.test_size
+        
+        # Directly sample indices instead of converting entire dataset to list
+        import numpy as np
+        np.random.seed(args.seed)
+        indices = np.random.permutation(len(dataset))[:total_needed]
+        
+        # Split indices
+        train_indices = indices[:args.train_size]
+        dev_indices = indices[args.train_size:args.train_size + args.dev_size]
+        test_indices = indices[args.train_size + args.dev_size:]
+        
+        print(f"\nDataset split:")
+        print(f"  Train: {len(train_indices)} samples")
+        print(f"  Dev: {len(dev_indices)} samples")
+        print(f"  Test: {len(test_indices)} samples")
+        
+        # Create output directory
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create manifests by selecting specific indices
+        print("\nCreating manifest files...")
+        
+        # Wrap indices with dataset
+        class IndexedDataset:
+            def __init__(self, dataset, indices):
+                self.dataset = dataset
+                self.indices = indices
+            
+            def __len__(self):
+                return len(self.indices)
+            
+            def __iter__(self):
+                for idx in self.indices:
+                    yield self.dataset[int(idx)]
+        
+        create_manifest(IndexedDataset(dataset, train_indices), output_dir / 'train.jsonl')
+        create_manifest(IndexedDataset(dataset, dev_indices), output_dir / 'dev.jsonl')
+        if len(test_indices) > 0:
+            create_manifest(IndexedDataset(dataset, test_indices), output_dir / 'test.jsonl')
         
     except Exception as e:
         print(f"Error loading dataset: {e}")
         print("Creating dummy data for testing...")
         
-        # Create dummy data
+        # Create dummy data with proper structure
         class DummyDataset:
             def __init__(self, size):
                 self.size = size
+                self.items = []
+                # Pre-generate all items to avoid issues with iteration
+                for i in range(size):
+                    self.items.append({
+                        'audio_array': [0.0] * 16000,  # 1 second of silence
+                        'sample_rate': 16000,
+                        'text': f'sample text {i}',
+                    })
             
             def __len__(self):
                 return self.size
             
             def __iter__(self):
-                for i in range(self.size):
-                    yield {
-                        'audio': {
-                            'array': [0.0] * 16000,  # 1 second of silence
-                            'sampling_rate': 16000,
-                        },
-                        'text': f'sample text {i}',
-                    }
+                return iter(self.items)
         
         all_data = DummyDataset(args.train_size + args.dev_size + args.test_size)
-    
-    # Convert to list for shuffling
-    all_samples = list(all_data)
-    random.shuffle(all_samples)
-    
-    # Split data
-    train_data = all_samples[:args.train_size]
-    dev_data = all_samples[args.train_size:args.train_size + args.dev_size]
-    test_data = all_samples[args.train_size + args.dev_size:
-                           args.train_size + args.dev_size + args.test_size]
-    
-    print(f"\nDataset split:")
-    print(f"  Train: {len(train_data)} samples")
-    print(f"  Dev: {len(dev_data)} samples")
-    print(f"  Test: {len(test_data)} samples")
-    
-    # Create output directory
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create manifests
-    print("\nCreating manifest files...")
-    
-    # Wrap data in simple containers
-    class SimpleDataset:
-        def __init__(self, data):
-            self.data = data
         
-        def __len__(self):
-            return len(self.data)
+        # For dummy data, just use simple splits
+        train_indices = list(range(args.train_size))
+        dev_indices = list(range(args.train_size, args.train_size + args.dev_size))
+        test_indices = list(range(args.train_size + args.dev_size, 
+                                  args.train_size + args.dev_size + args.test_size))
         
-        def __iter__(self):
-            return iter(self.data)
-    
-    create_manifest(SimpleDataset(train_data), output_dir / 'train.jsonl')
-    create_manifest(SimpleDataset(dev_data), output_dir / 'dev.jsonl')
-    create_manifest(SimpleDataset(test_data), output_dir / 'test.jsonl')
+        print(f"\nDataset split:")
+        print(f"  Train: {len(train_indices)} samples")
+        print(f"  Dev: {len(dev_indices)} samples")
+        print(f"  Test: {len(test_indices)} samples")
+        
+        # Create output directory
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create manifests
+        print("\nCreating manifest files...")
+        
+        class IndexedDataset:
+            def __init__(self, dataset, indices):
+                self.dataset = dataset
+                self.indices = indices
+            
+            def __len__(self):
+                return len(self.indices)
+            
+            def __iter__(self):
+                items = list(self.dataset)  # Convert to list first
+                for idx in self.indices:
+                    yield items[int(idx)]
+        
+        create_manifest(IndexedDataset(all_data, train_indices), output_dir / 'train.jsonl')
+        create_manifest(IndexedDataset(all_data, dev_indices), output_dir / 'dev.jsonl')
+        if len(test_indices) > 0:
+            create_manifest(IndexedDataset(all_data, test_indices), output_dir / 'test.jsonl')
     
     print("\nDataset preparation completed!")
     print(f"Manifest files saved to: {output_dir}")

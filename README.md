@@ -1,26 +1,30 @@
 # **README**
 
-# Joint Training of RNN-T + Two-Pass LAS ASR (SSI Dataset)
+# Joint Training of RNN-T + Two-Pass LAS ASR + Neural Confidence Model (NCM)
 
-This repository implements a **Two-Pass End-to-End Automatic Speech Recognition (ASR) system** where:
+This repository implements a **Two-Pass End-to-End Automatic Speech Recognition (ASR) system** and an additional **Neural Utterance Confidence Model (NCM)**:
 
-- **First pass:** RNN-Transducer (RNN-T) — streaming ASR  
-- **Second pass:** LAS (Listen-Attend-Spell) decoder — offline rescoring  
-- **Both models are trained jointly** using a shared encoder and a combined loss
+* **First pass:** RNN-Transducer (RNN-T) — streaming ASR
+* **Second pass:** LAS (Listen-Attend-Spell) decoder — offline rescoring
+* **Both models are trained jointly using shared encoder**
+* **NCM** predicts whether a decoded utterance is *correct or incorrect* using features extracted from both RNN-T and LAS
+  (based on *Neural Utterance Confidence Measure for RNN-Transducers and Two-Pass Models* )
 
-Dataset: `stapesai/ssi-speech-emotion-recognition`  
-Configuration system: **Hydra**  
-Training & metrics tracking: **Weights & Biases (wandb)**
-
+Dataset: `stapesai/ssi-speech-emotion-recognition`
+Configuration system: **Hydra**
+Training & metrics tracking: **wandb**
 ---
 
 ## 1. Project Objectives
 
-- [ ] Implement a compact RNN-T model  
-- [ ] Implement a LAS decoder sharing the encoder with RNN-T  
-- [ ] Integrate both models into a **joint training pipeline**  
-- [ ] Log all losses and metrics via wandb  
-- [ ] Use Hydra for experiment configuration  
+### **NCM (Neural Confidence Model)**
+
+* [ ] Extract predictor features from RNN-T
+* [ ] Extract predictor features from LAS second pass
+* [ ] Build NCM dataset: label hypotheses as **Accept (1)** or **Reject (0)**
+* [ ] Train binary classifier for utterance-level confidence
+* [ ] Evaluate NCM using AUC, EER, NCE
+* [ ] Support distributed-ASR scenario metrics (CS vs RIER) as in the paper 
 
 ---
 
@@ -63,8 +67,9 @@ python -m scripts.prepare_ssi
 .
 ├── configs/
 │   ├── experiment/
-│   │   ├── joint_ssi.yaml      # Joint RNN-T + LAS experiment config (Hydra)
-│   │   └── rnnt_only_ssi.yaml  # Optional RNN-T baseline
+│   │   ├── joint_ssi.yaml
+│   │   ├── rnnt_only_ssi.yaml
+│   │   └── ncm_ssi.yaml          # NEW — NCM training config
 │   ├── decoding/
 │   │   └── ssi.yaml
 │   └── data/
@@ -78,18 +83,23 @@ python -m scripts.prepare_ssi
 │   │   ├── las_decoder.py
 │   │   ├── joint_model.py
 │   │   ├── rnnt_loss.py
+│   │   ├── ncm_model.py          # NEW — 2-layer MLP for NCM
 │   │   └── metrics.py
 │   ├── train_joint.py
 │   ├── train_rnnt_only.py
+│   ├── train_ncm.py              # NEW — NCM binary classification trainer
+│   ├── extract_features.py       # NEW — feature extractor for NCM
 │   ├── decode_rnnt.py
 │   └── decode_two_pass.py
 ├── scripts/
 │   ├── prepare_ssi.py
 │   ├── run_joint.sh
-│   └── run_rnnt_only.sh
+│   ├── run_rnnt_only.sh
+│   ├── run_extract_features.sh   # NEW
+│   └── run_ncm.sh                # NEW
 ├── requirements.txt
 └── README.md
-````
+```
 
 ---
 
@@ -137,6 +147,17 @@ wandb.log({
     "val/wer_rnnt": val_wer_rnnt,
     "val/wer_2pass": val_wer_2pass,
     "epoch": epoch,
+})
+```
+
+### NCM logging example
+
+```python
+wandb.log({
+    "train/loss_ncm": loss,
+    "train/auc": auc,
+    "train/eer": eer,
+    "train/nce": nce,
 })
 ```
 
@@ -245,7 +266,116 @@ L_total = λ_rnnt * L_rnnt + λ_las * L_las
 
 ---
 
-## 8. Training Pipeline
+# **8. Neural Utterance Confidence Model (NCM)**
+
+*(based on Gupta et al., ICASSP 2021 )*
+
+The NCM is a **binary classifier** predicting whether a given ASR hypothesis is correct.
+
+---
+
+## 8.1 **Input Feature Types**
+
+We extract all predictor features described in the paper:
+
+### **From RNN-T**
+
+* **Transcription network output (Trans):**
+  Mean-pooled encoder features (acoustic summary)
+* **Prediction network output (Pred):**
+  Mean-pooled prediction network states
+* **Joint network logits (Joint):**
+  Top-K logits per timestep (self-attention pooling)
+
+### **From LAS second pass**
+
+* **LAS encoder output (Enc):**
+  Summary of second-pass encoder
+* **LAS decoder logits (Dec):**
+  Top-K decoder logits
+* **Beam scores:**
+  Log probability of each beam (RNN-T + LAS)
+
+### **Optional**
+
+* **Multi-beam Joint features**
+* **Multi-beam LAS decoder features**
+  (Paper notes these often do NOT help for RNN-T systems due to blank-heavy beams)
+
+---
+
+## 8.2 **NCM Architecture**
+
+A lightweight MLP:
+
+```text
+Input: concatenated feature vector
+Hidden: 64 units (ReLU)
+Hidden: 64 units (ReLU)
+Output: Sigmoid → p(accept)
+```
+
+Same as described in the paper.
+
+---
+
+## 8.3 NCM Dataset Construction
+
+Following the paper:
+
+1. Run trained **RNN-T + LAS** on dev set with beam search
+2. For each utterance:
+
+   * If **ASR hypothesis == reference**, label as **1 (Accept)**
+   * Else label as **0 (Reject)**
+3. Extract all predictor features
+4. Save as pickled dataset (`train.pkl`, `dev.pkl`)
+
+Command:
+
+```bash
+python -m src.extract_features \
+  model.checkpoint=exp/joint_ssi/best.ckpt \
+  data.dev_manifest=data/ssi/dev.jsonl \
+  output_dir=data/ncm_features/
+```
+
+---
+
+## 8.4 Training NCM
+
+```bash
+python -m src.train_ncm experiment=ncm_ssi
+```
+
+Metrics:
+
+* AUC
+* EER
+* Normalized Cross Entropy (NCE)
+* Loss (binary cross entropy)
+
+---
+
+## 8.5 Using NCM in Distributed-ASR Scenario
+
+The paper proposes **Cost Saving (CS) vs Relative Increase in Error Rate (RIER)** evaluation.
+We include optional evaluation script:
+
+```bash
+python -m src.eval_ncm \
+  ncm.checkpoint=exp/ncm_ssi/best.ckpt \
+  test_manifest=data/ssi/test.jsonl
+```
+
+Outputs:
+
+* AUC / EER / NCE
+* CS@0%, CS@5%, CS@10% (as in Table 1 of the paper)
+
+---
+
+## 9. Training Pipeline
 
 ### Step 0 — Prepare dataset
 
@@ -270,9 +400,21 @@ Metrics logged:
 * wer_rnnt, wer_2pass
 * cer_rnnt, cer_2pass
 
+### Step 2 — Extract NCM features
+
+```bash
+bash scripts/run_extract_features.sh
+```
+
+### Step 3 — Train NCM
+
+```bash
+bash scripts/run_ncm.sh
+```
+
 ---
 
-## 9. Decoding & Evaluation
+## 10. Decoding & Evaluation
 
 ### RNN-T Only (Streaming)
 
@@ -293,4 +435,13 @@ python -m src.decode_two_pass \
   decoding.beam_size_rnnt=4 \
   decoding.beam_size_las=4 \
   output_path=exp/joint_ssi/decode_2pass.jsonl
+```
+
+### Use NCM to filter low-confidence utterances
+
+```bash
+python -m src.decode_two_pass \
+  use_ncm=true \
+  ncm.checkpoint=exp/ncm_ssi/best.ckpt \
+  threshold=0.6
 ```

@@ -97,9 +97,20 @@ class SSIDataset(Dataset):
         data = []
         
         with open(manifest_path, 'r', encoding='utf-8') as f:
-            for line in f:
+            for i, line in enumerate(f):
                 item = json.loads(line.strip())
-                data.append(item)
+                # Only store metadata, not the full audio array
+                data.append({
+                    'id': item['id'],
+                    'audio_path': item.get('audio_path', None),  # Path to audio file
+                    'audio': item.get('audio', None),  # Legacy: inline audio array
+                    'sample_rate': item['sample_rate'],
+                    'text': item['text'],
+                    'duration': item.get('duration', 0),
+                })
+                # Show progress every 1000 samples
+                if (i + 1) % 1000 == 0:
+                    print(f"  → Loaded {i+1} samples...")
         
         print(f"Loaded {len(data)} samples from manifest")
         return data
@@ -118,13 +129,25 @@ class SSIDataset(Dataset):
                 - text: str
                 - duration: float
         """
+        import soundfile as sf
+        
         item = self.data[idx]
         
-        # Convert audio to tensor
-        if isinstance(item['audio'], list):
-            waveform = torch.tensor(item['audio'], dtype=torch.float32)
+        # Load audio from file or from inline array
+        if item.get('audio_path') and Path(item['audio_path']).exists():
+            # Load from audio file (preferred method)
+            waveform, sample_rate = sf.read(item['audio_path'])
+            waveform = torch.tensor(waveform, dtype=torch.float32)
+            sample_rate = item['sample_rate']  # Use stored sample rate
+        elif item.get('audio') is not None:
+            # Load from inline array (legacy support)
+            if isinstance(item['audio'], list):
+                waveform = torch.tensor(item['audio'], dtype=torch.float32)
+            else:
+                waveform = torch.tensor(item['audio'], dtype=torch.float32)
+            sample_rate = item['sample_rate']
         else:
-            waveform = torch.tensor(item['audio'], dtype=torch.float32)
+            raise ValueError(f"No audio data found for sample {idx}")
         
         # Ensure waveform is 2D: (1, num_samples)
         if waveform.dim() == 1:
@@ -132,9 +155,9 @@ class SSIDataset(Dataset):
         
         return {
             'waveform': waveform,
-            'sample_rate': item['sample_rate'],
+            'sample_rate': sample_rate,
             'text': item['text'],
-            'duration': item.get('duration', len(waveform[0]) / item['sample_rate']),
+            'duration': item.get('duration', len(waveform[0]) / sample_rate),
         }
 
 

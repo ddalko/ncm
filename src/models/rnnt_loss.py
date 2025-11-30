@@ -103,6 +103,21 @@ class LabelSmoothingLoss(nn.Module):
         # Flatten if needed
         if logits.dim() == 3:
             batch_size, seq_len, vocab_size = logits.size()
+            # Ensure targets match logits sequence length
+            if targets.size(1) != seq_len:
+                # Truncate or pad targets to match logits
+                if targets.size(1) > seq_len:
+                    targets = targets[:, :seq_len]
+                else:
+                    # Pad with padding_idx
+                    padding = torch.full(
+                        (batch_size, seq_len - targets.size(1)),
+                        self.padding_idx,
+                        dtype=targets.dtype,
+                        device=targets.device
+                    )
+                    targets = torch.cat([targets, padding], dim=1)
+            
             logits = logits.view(-1, vocab_size)
             targets = targets.view(-1)
         
@@ -116,7 +131,7 @@ class LabelSmoothingLoss(nn.Module):
         smooth_targets += self.smoothing / (self.vocab_size - 1)
         
         # Mask padding tokens
-        mask = (targets != self.padding_idx).unsqueeze(1)
+        mask = (targets != self.padding_idx).unsqueeze(1).float()
         smooth_targets = smooth_targets * mask
         
         # Compute loss
@@ -127,7 +142,7 @@ class LabelSmoothingLoss(nn.Module):
         loss = loss * mask
         
         if self.reduction == 'mean':
-            return loss.sum() / mask.sum()
+            return loss.sum() / (mask.sum() + 1e-8)
         elif self.reduction == 'sum':
             return loss.sum()
         else:

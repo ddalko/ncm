@@ -38,13 +38,19 @@ def train_epoch(
     total_las_loss = 0.0
     num_batches = 0
     
-    pbar = tqdm(dataloader, desc=f"Epoch {epoch} [Train]")
+    print(f"\n[Epoch {epoch}] Starting training with {len(dataloader)} batches...")
+    pbar = tqdm(dataloader, desc=f"Epoch {epoch} [Train]", dynamic_ncols=True)
     
     for batch_idx, batch in enumerate(pbar):
+        if batch_idx == 0:
+            print(f"  → Processing first batch (batch_idx=0)...")
         # Move data to device
         features = batch['features'].transpose(1, 2).to(device)  # (B, T, n_mels)
         feature_lengths = batch['feature_lengths'].to(device)
         texts = batch['texts']
+        
+        if batch_idx == 0:
+            print(f"  → Batch shape: features={features.shape}, lengths={feature_lengths.shape}")
         
         # Encode texts to tokens
         target_tokens = []
@@ -64,24 +70,35 @@ def train_epoch(
         padded_targets = padded_targets.to(device)
         target_lengths = torch.tensor(target_lengths, dtype=torch.long).to(device)
         
+        # For RNN-T: prepend blank to targets for prediction network input
+        # This creates targets of length target_len+1
+        rnnt_targets = torch.cat([
+            torch.full((len(texts), 1), tokenizer.blank_id, dtype=torch.long, device=device),
+            padded_targets
+        ], dim=1)
+        rnnt_target_lengths = target_lengths + 1
+        
         # Forward pass
         optimizer.zero_grad()
+        
+        if batch_idx == 0:
+            print(f"  → Starting forward pass...")
         
         outputs = model(
             features=features,
             feature_lengths=feature_lengths,
-            labels=padded_targets,
-            label_lengths=target_lengths,
+            labels=rnnt_targets,  # Use RNN-T targets (with prepended blank)
+            label_lengths=rnnt_target_lengths,  # Use RNN-T lengths (target_len+1)
             sos_id=tokenizer.sos_id,
         )
         
-        # Compute loss
+        # Compute loss - use original targets for loss computation
         loss, rnnt_loss, las_loss = criterion(
             rnnt_logits=outputs['rnnt_logits'],
             las_logits=outputs['las_logits'],
-            targets=padded_targets,
+            targets=padded_targets,  # Original targets (without prepended blank)
             rnnt_logit_lengths=feature_lengths,
-            target_lengths=target_lengths,
+            target_lengths=target_lengths,  # Original target lengths
         )
         
         # Backward pass
@@ -167,22 +184,29 @@ def validate(
         padded_targets = padded_targets.to(device)
         target_lengths = torch.tensor(target_lengths, dtype=torch.long).to(device)
         
+        # For RNN-T: prepend blank to targets
+        rnnt_targets = torch.cat([
+            torch.full((len(texts), 1), tokenizer.blank_id, dtype=torch.long, device=device),
+            padded_targets
+        ], dim=1)
+        rnnt_target_lengths = target_lengths + 1
+        
         # Forward pass
         outputs = model(
             features=features,
             feature_lengths=feature_lengths,
-            labels=padded_targets,
-            label_lengths=target_lengths,
+            labels=rnnt_targets,  # Use RNN-T targets (with prepended blank)
+            label_lengths=rnnt_target_lengths,  # Use RNN-T lengths
             sos_id=tokenizer.sos_id,
         )
         
-        # Compute loss
+        # Compute loss - use original targets
         loss, rnnt_loss, las_loss = criterion(
             rnnt_logits=outputs['rnnt_logits'],
             las_logits=outputs['las_logits'],
-            targets=padded_targets,
+            targets=padded_targets,  # Original targets
             rnnt_logit_lengths=feature_lengths,
-            target_lengths=target_lengths,
+            target_lengths=target_lengths,  # Original lengths
         )
         
         total_loss += loss.item()
@@ -259,7 +283,7 @@ def main(cfg: DictConfig):
         split='train',
         manifest_path=cfg.data.get('train_manifest', None),
         batch_size=cfg.training.batch_size,
-        num_workers=cfg.training.get('num_workers', 4),
+        num_workers=0,  # Set to 0 to avoid multiprocessing issues
         shuffle=True,
         collate_fn=collate_wrapper,
     )
@@ -268,7 +292,7 @@ def main(cfg: DictConfig):
         split='dev',
         manifest_path=cfg.data.get('dev_manifest', None),
         batch_size=cfg.training.batch_size,
-        num_workers=cfg.training.get('num_workers', 4),
+        num_workers=0,  # Set to 0 to avoid multiprocessing issues
         shuffle=False,
         collate_fn=collate_wrapper,
     )

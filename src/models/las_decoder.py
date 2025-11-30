@@ -231,15 +231,16 @@ class LASDecoder(nn.Module):
         # Create encoder mask
         mask = torch.arange(max_time, device=device).unsqueeze(0) < encoder_lengths.unsqueeze(1)
         
-        # Prepend SOS token to targets
+        # Prepend SOS token to targets for teacher forcing
+        # Input at step t is targets[t-1], to predict targets[t]
         sos = torch.full((batch_size, 1), sos_id, dtype=torch.long, device=device)
-        decoder_inputs = torch.cat([sos, targets[:, :-1]], dim=1)  # Shift right
+        decoder_inputs = torch.cat([sos, targets], dim=1)  # (B, max_target_len+1)
         
-        # Collect outputs
+        # Collect outputs - we need max_target_len outputs (one for each target token)
         all_logits = []
         
         for t in range(max_target_len):
-            input_token = decoder_inputs[:, t:t+1]  # (B, 1)
+            input_token = decoder_inputs[:, t:t+1]  # (B, 1) - use shifted input
             
             logits, hidden_state, attention_weights = self.forward_step(
                 input_token, hidden_state, encoder_outputs, attention_weights, mask

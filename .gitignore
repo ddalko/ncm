@@ -4,3 +4,7 @@ data/ssi
 .vscode/
 wandb/
 exp/
+
+__pycache__
+*.pyc
+
