@@ -1,0 +1,68 @@
+# NCM Training Configuration for SSI Dataset
+
+defaults:
+  - /data: ssi
+  - _self_
+
+# Model checkpoint from joint training
+model:
+  checkpoint: exp/joint_ssi/best.ckpt
+  vocab_size: 82
+  encoder_hidden: 512
+  encoder_layers: 3
+  pred_hidden: 512
+  pred_layers: 1
+  las:
+    enc2_hidden: 512
+    dec_hidden: 512
+    embedding_dim: 256
+    attention: "location"
+
+# NCM-specific configuration
+ncm:
+  # Feature extraction
+  features_path: data/ncm_features/features.pkl
+  
+  # NCM model
+  hidden_dim: 64
+  
+  # Training
+  batch_size: 32
+  num_epochs: 50
+  lr: 0.001
+  weight_decay: 0.0001
+  
+  # Data split
+  val_split: 0.2
+  
+  # Output
+  output_dir: exp/ncm_ssi
+
+# Top-K logits to extract
+ncm_top_k: 10
+
+# Batch size for feature extraction
+batch_size: 16
+
+# Data paths
+data:
+  root: data/ssi
+  train_manifest: ${data.root}/train.jsonl
+  dev_manifest: ${data.root}/dev.jsonl
+  sample_rate: 16000
+  n_mels: 80
+
+# WandB
+wandb:
+  enabled: true
+  project: "ssi-ncm"
+  entity: "ddalko-korea-university"
+  run_name: "ncm_ssi"
+
+# Random seed
+seed: 42
+
+# Hydra
+hydra:
+  run:
+    dir: exp/ncm_ssi

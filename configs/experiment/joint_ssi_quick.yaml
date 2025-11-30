@@ -1,0 +1,49 @@
+# Quick test configuration for debugging - 2025.11.29
+
+# @package _global_
+
+defaults:
+  - /data: ssi
+  - /decoding: ssi
+
+data:
+  root: data/ssi
+  train_manifest: ${data.root}/train_small.jsonl  # Only 100 samples for quick testing
+  dev_manifest: ${data.root}/dev.jsonl
+  sample_rate: 16000
+  n_mels: 80
+
+model:
+  vocab_size: 300
+  encoder_hidden: 256  # Reduced for speed
+  encoder_layers: 2    # Reduced for speed
+  pred_hidden: 256
+  pred_layers: 1
+  joint_dim: 256
+  dropout: 0.1
+  label_smoothing: 0.1
+  
+  las:
+    enc2_hidden: 256
+    dec_hidden: 256
+    embedding_dim: 128
+    attention_dim: 128
+    attention: "location"
+  
+  loss_weights:
+    rnnt: 1.0
+    las: 1.0
+
+training:
+  batch_size: 4  # Small batch for quick testing
+  num_epochs: 2  # Just 2 epochs for validation
+  lr: 1.0e-3
+  weight_decay: 1.0e-6
+  grad_clip: 5.0
+  num_workers: 0  # Single worker for easier debugging
+  output_dir: exp/joint_ssi_quick_test
+
+wandb:
+  project: "ssi-two-pass"
+  entity: null
+  run_name: "joint_ssi_quick_test"

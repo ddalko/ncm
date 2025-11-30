@@ -161,13 +161,53 @@ class SSIDataset(Dataset):
         }
 
 
+def collate_fn(batch: List[Dict]) -> Dict:
+    """
+    Collate function for batching SSI samples.
+    
+    Args:
+        batch: List of samples from __getitem__
+        
+    Returns:
+        Dict with batched tensors
+    """
+    # Extract individual components
+    waveforms = [item['waveform'] for item in batch]
+    sample_rates = [item['sample_rate'] for item in batch]
+    texts = [item['text'] for item in batch]
+    durations = [item['duration'] for item in batch]
+    
+    # Pad waveforms to same length
+    max_length = max(w.size(1) for w in waveforms)
+    padded_waveforms = []
+    waveform_lengths = []
+    
+    for waveform in waveforms:
+        length = waveform.size(1)
+        waveform_lengths.append(length)
+        
+        if length < max_length:
+            padding = torch.zeros(1, max_length - length)
+            waveform = torch.cat([waveform, padding], dim=1)
+        
+        padded_waveforms.append(waveform)
+    
+    return {
+        'waveforms': torch.stack(padded_waveforms).squeeze(1),  # (B, T)
+        'waveform_lengths': torch.tensor(waveform_lengths, dtype=torch.long),
+        'sample_rates': sample_rates,
+        'texts': texts,
+        'durations': durations,
+    }
+
+
 def create_ssi_dataloader(
     split: str,
     manifest_path: Optional[str] = None,
     batch_size: int = 16,
     num_workers: int = 4,
     shuffle: bool = True,
-    collate_fn=None,
+    collate_fn_override=None,
 ) -> DataLoader:
     """
     Create a DataLoader for SSI dataset.
@@ -193,7 +233,7 @@ def create_ssi_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn_override if collate_fn_override else collate_fn,
         pin_memory=True,
     )
     

@@ -1,0 +1,52 @@
+# NCM Lightweight Configuration (beam_scores + LAS-decoder only)
+# Minimal feature set for faster inference
+
+defaults:
+  - /data: ssi
+  - _self_
+
+# Model checkpoint from joint training
+model:
+  checkpoint: exp/joint_ssi/best.ckpt
+  vocab_size: 82
+  encoder_hidden: 512
+  encoder_layers: 3
+  pred_hidden: 512
+  pred_layers: 1
+  las:
+    enc2_hidden: 512
+    dec_hidden: 512
+    embedding_dim: 256
+    attention: location
+
+# NCM-specific configuration (ablation study: LAS-decoder only)
+ncm:
+  features_path: data/ncm_features_light/features.pkl
+  hidden_dim: 64  # SAME as full model for fair ablation study
+  batch_size: 32
+  num_epochs: 50
+  lr: 0.001
+  weight_decay: 0.0001
+  val_split: 0.2
+  output_dir: exp/ncm_ssi_ablation
+
+# Top-K logits
+ncm_top_k: 10
+
+# Batch size for joint model
+batch_size: 16
+
+# WandB logging
+wandb:
+  enabled: true
+  project: ssi-ncm
+  entity: ddalko-korea-university
+  run_name: ncm_ssi_ablation  # Ablation study name
+
+# Random seed
+seed: 42
+
+# Hydra working directory
+hydra:
+  run:
+    dir: ${ncm.output_dir}
